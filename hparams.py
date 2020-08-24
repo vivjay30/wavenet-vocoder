@@ -20,6 +20,8 @@ hparams = HParams(
     input_type="raw",
     quantize_channels=65536,  # 65536 or 256
 
+    manual_scalar_input=False,  # Scalar input manual override
+    input_noise=0.0,  # For BASIS separation, train noised up inputs
     # Audio:
     # time-domain pre/post-processing
     # e.g., preemphasis/inv_preemphasis
@@ -28,6 +30,7 @@ hparams = HParams(
     postprocess="",
     # waveform domain scaling
     global_gain_scale=1.0,
+    normalize_max_audio=False,
 
     sample_rate=22050,
     # this is only valid for mulaw is True

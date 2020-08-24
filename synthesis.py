@@ -39,11 +39,11 @@ use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
 
 
-def batch_wavegen(model, c=None, g=None, fast=True, tqdm=tqdm):
+def batch_wavegen(model, c=None, g=None, fast=True, tqdm=tqdm, length=None):
     from train import sanity_check
     sanity_check(model, c, g)
-    assert c is not None
-    B = c.shape[0]
+    # assert c is not None
+    B = 1 #c.shape[0]
     model.eval()
     if fast:
         model.make_generation_fast_()
@@ -52,11 +52,9 @@ def batch_wavegen(model, c=None, g=None, fast=True, tqdm=tqdm):
     g = None if g is None else g.to(device)
     c = None if c is None else c.to(device)
 
-    if hparams.upsample_conditional_features:
+    if hparams.upsample_conditional_features and length is None:
         length = (c.shape[-1] - hparams.cin_pad * 2) * audio.get_hop_size()
-    else:
-        # already dupulicated
-        length = c.shape[-1]
+
 
     with torch.no_grad():
         y_hat = model.incremental_forward(

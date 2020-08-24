@@ -292,13 +292,15 @@ class WaveNet(nn.Module):
                 initial_input = initial_input.transpose(1, 2).contiguous()
 
         current_input = initial_input
-
         for t in tqdm(range(T)):
             if test_inputs is not None and t < test_inputs.size(1):
                 current_input = test_inputs[:, t, :].unsqueeze(1)
             else:
                 if t > 0:
                     current_input = outputs[-1]
+
+                    if self.scalar_input:
+                        current_input = current_input.clone().detach().new_tensor(current_input.argmax().reshape(1, 1, 1))
 
             # Conditioning features for single time step
             ct = None if c is None else c[:, t, :].unsqueeze(1)
@@ -319,7 +321,7 @@ class WaveNet(nn.Module):
                     x = f(x)
 
             # Generate next input by sampling
-            if self.scalar_input:
+            if False: #self.scalar_input:
                 if self.output_distribution == "Logistic":
                     x = sample_from_discretized_mix_logistic(
                         x.view(B, -1, 1), log_scale_min=log_scale_min)
@@ -333,6 +335,7 @@ class WaveNet(nn.Module):
                 if quantize:
                     dist = torch.distributions.OneHotCategorical(x)
                     x = dist.sample()
+
             outputs += [x.data]
         # T x B x C
         outputs = torch.stack(outputs)
@@ -359,3 +362,40 @@ class WaveNet(nn.Module):
             except ValueError:  # this module didn't have weight norm
                 return
         self.apply(remove_weight_norm)
+
+
+    def smoothed_loss(self, input_batch, sigma=1.0):
+        """
+        We compute the probability distribution smoothed by a gaussian. Then we return
+        the gradient w.r.t each sample along with the actual probabilities
+
+        Args:
+            input_batch: Tensor of size Batch x Time (in mu-law space 0-256)
+            sigma: Amount of smoothing for the probability distribution
+
+        Returns:
+            log_prob: (b x t) Log probability of waveform after smoothing
+            grad: (b x t) gradient of log_prob w.r.t each sample
+            prediction: (b x t x 256) the actual 256 bin softmaxed predictions at each timestep 
+        """
+        if not self.scalar_input:
+            raise "Not implemented for non-scalar input"
+
+        # Cut off last sample of input to preserve causality
+        network_input = input_batch[:, :-1]
+        target_output = input_batch[:, 1:].unsqueeze(1)
+
+        # Forward pass
+        prediction = self.forward(network_input.unsqueeze(0)) # B x 256 x T
+
+        indices = torch.arange(0, self.out_channels, device=prediction.device).view(1, self.out_channels, 1)
+
+        log_prob = np.log(1./(sigma * np.sqrt(2 * np.pi))) \
+                   + torch.logsumexp(prediction - 0.5 * ((target_output - indices) / sigma) ** 2, axis=1) \
+                   - torch.logsumexp(prediction, axis=1)
+
+        # log_prob = torch.sum(log_prob)
+
+        return log_prob, prediction 
+
+

@@ -66,9 +66,12 @@ def get_data_loader(data_dir, collate_fn):
                                                  max_steps=None, cin_pad=hparams.cin_pad))
     else:
         X = None
-    C = FileSourceDataset(MelSpecDataSource(data_dir,
-                                            hop_size=audio.get_hop_size(),
-                                            max_steps=None, cin_pad=hparams.cin_pad))
+
+    # C = FileSourceDataset(MelSpecDataSource(data_dir,
+    #                                         hop_size=audio.get_hop_size(),
+    #                                         max_steps=None, cin_pad=hparams.cin_pad))
+    
+    C = None
     # No audio found:
     if X is None:
         assert len(C) > 0
@@ -77,11 +80,11 @@ def get_data_loader(data_dir, collate_fn):
             num_workers=hparams.num_workers, sampler=None, shuffle=False,
             collate_fn=dummy_collate, pin_memory=hparams.pin_memory)
     else:
-        assert len(X) == len(C)
-        if C[0].shape[-1] != hparams.cin_channels:
-            raise RuntimeError(
-                """Invalid cin_channnels {}. Expectd to be {}.""".format(
-                    hparams.cin_channels, C[0].shape[-1]))
+        # assert len(X) == len(C)
+        # if C[0].shape[-1] != hparams.cin_channels:
+        #     raise RuntimeError(
+        #         """Invalid cin_channnels {}. Expectd to be {}.""".format(
+        #             hparams.cin_channels, C[0].shape[-1]))
         dataset = PyTorchDataset(X, C)
 
         data_loader = data_utils.DataLoader(
@@ -160,8 +163,10 @@ if __name__ == "__main__":
     cin_pad = hparams.cin_pad
     file_idx = 0
     for idx, (x, y, c, g, input_lengths) in enumerate(test_data_loader):
-        if cin_pad > 0:
-            c = F.pad(c, pad=(cin_pad, cin_pad), mode="replicate")
+        # if cin_pad > 0:
+        #     c = F.pad(c, pad=(cin_pad, cin_pad), mode="replicate")
+
+        c = None
 
         # B x 1 x T
         if x[0] is not None:
@@ -181,10 +186,10 @@ if __name__ == "__main__":
                 ref_files.append(test_data_loader.dataset.X.collected_files[file_idx][0])
             else:
                 pass
-            if hasattr(test_data_loader.dataset, "Mel"):
-                ref_feats.append(test_data_loader.dataset.Mel.collected_files[file_idx][0])
-            else:
-                ref_feats.append(test_data_loader.dataset.collected_files[file_idx][0])
+            # if hasattr(test_data_loader.dataset, "Mel"):
+            #     ref_feats.append(test_data_loader.dataset.Mel.collected_files[file_idx][0])
+            # else:
+            #     ref_feats.append(test_data_loader.dataset.collected_files[file_idx][0])
             file_idx += 1
 
         if num_utterances > 0 and g is not None:

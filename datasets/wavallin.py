@@ -10,23 +10,26 @@ from os.path import exists, basename, splitext
 import librosa
 from glob import glob
 from os.path import join
+import soundfile as sf
 
-from wavenet_vocoder.util import is_mulaw_quantize, is_mulaw, is_raw
+from wavenet_vocoder.util import is_mulaw_quantize, is_mulaw, is_raw, \
+    is_linear_quantize, linear_quantize, inv_linear_quantize
 
 
-def build_from_path(in_dir, out_dir, num_workers=1, tqdm=lambda x: x):
+def build_from_path(in_dir, out_dir, num_workers=1, extension="*.wav", no_mel=False,tqdm=lambda x: x):
     executor = ProcessPoolExecutor(max_workers=num_workers)
     futures = []
     index = 1
-    src_files = sorted(glob(join(in_dir, "*.wav")))
+    src_files = sorted(glob(join(in_dir, "**/") + extension, recursive=True))
+    print("Length files: {}".format(len(src_files)))
     for wav_path in src_files:
         futures.append(executor.submit(
-            partial(_process_utterance, out_dir, index, wav_path, "dummy")))
+            partial(_process_utterance, out_dir, index, wav_path, "dummy", no_mel)))
         index += 1
     return [future.result() for future in tqdm(futures)]
 
 
-def _process_utterance(out_dir, index, wav_path, text):
+def _process_utterance(out_dir, index, wav_path, text, no_mel):
     # Load the audio to a numpy array:
     wav = audio.load_wav(wav_path)
 
@@ -48,6 +51,16 @@ def _process_utterance(out_dir, index, wav_path, text):
             wav = wav[start:end]
         constant_values = P.mulaw_quantize(0, hparams.quantize_channels - 1)
         out_dtype = np.int16
+    elif is_linear_quantize(hparams.input_type):
+        # Trim silences in linear quantized domain
+        silence_threshold = 0
+        if silence_threshold > 0:
+            # [0, quantize_channels)
+            out = linear_quantize(wav, hparams.quantize_channels - 1)
+            start, end = audio.start_and_end_indices(out, silence_threshold)
+            wav = wav[start:end]
+        constant_values = linear_quantize(0, hparams.quantize_channels - 1)
+        out_dtype = np.int16
     elif is_mulaw(hparams.input_type):
         # [-1, 1]
         constant_values = P.mulaw(0.0, hparams.quantize_channels - 1)
@@ -59,10 +72,14 @@ def _process_utterance(out_dir, index, wav_path, text):
 
     # Compute a mel-scale spectrogram from the trimmed wav:
     # (N, D)
-    mel_spectrogram = audio.logmelspectrogram(wav).astype(np.float32).T
+    if not no_mel:
+        mel_spectrogram = audio.logmelspectrogram(wav).astype(np.float32).T
 
     if hparams.global_gain_scale > 0:
         wav *= hparams.global_gain_scale
+
+    if hparams.normalize_max_audio:
+        wav /= abs(wav).max()
 
     # Time domain preprocessing
     if hparams.preprocess is not None and hparams.preprocess not in ["", "none"]:
@@ -80,6 +97,8 @@ def _process_utterance(out_dir, index, wav_path, text):
     # Set waveform target (out)
     if is_mulaw_quantize(hparams.input_type):
         out = P.mulaw_quantize(wav, hparams.quantize_channels - 1)
+    elif is_linear_quantize(hparams.input_type):
+        out = linear_quantize(wav, hparams.quantize_channels - 1)
     elif is_mulaw(hparams.input_type):
         out = P.mulaw(wav, hparams.quantize_channels - 1)
     else:
@@ -87,26 +106,30 @@ def _process_utterance(out_dir, index, wav_path, text):
 
     # zero pad
     # this is needed to adjust time resolution between audio and mel-spectrogram
-    l, r = audio.pad_lr(out, hparams.fft_size, audio.get_hop_size())
-    if l > 0 or r > 0:
-        out = np.pad(out, (l, r), mode="constant", constant_values=constant_values)
-    N = mel_spectrogram.shape[0]
-    assert len(out) >= N * audio.get_hop_size()
+    if not no_mel:
+        l, r = audio.pad_lr(out, hparams.fft_size, audio.get_hop_size())
+        if l > 0 or r > 0:
+            out = np.pad(out, (l, r), mode="constant", constant_values=constant_values)
+        N = mel_spectrogram.shape[0]
+        assert len(out) >= N * audio.get_hop_size()
 
-    # time resolution adjustment
-    # ensure length of raw audio is multiple of hop_size so that we can use
-    # transposed convolution to upsample
-    out = out[:N * audio.get_hop_size()]
-    assert len(out) % audio.get_hop_size() == 0
+        # time resolution adjustment
+        # ensure length of raw audio is multiple of hop_size so that we can use
+        # transposed convolution to upsample
+        out = out[:N * audio.get_hop_size()]
+        assert len(out) % audio.get_hop_size() == 0
 
     # Write the spectrograms to disk:
     name = splitext(basename(wav_path))[0]
     audio_filename = '%s-wave.npy' % (name)
-    mel_filename = '%s-feats.npy' % (name)
     np.save(os.path.join(out_dir, audio_filename),
             out.astype(out_dtype), allow_pickle=False)
-    np.save(os.path.join(out_dir, mel_filename),
-            mel_spectrogram.astype(np.float32), allow_pickle=False)
+    if not no_mel:
+        mel_filename = '%s-feats.npy' % (name)
+        # np.save(os.path.join(out_dir, mel_filename),
+        #         mel_spectrogram.astype(np.float32), allow_pickle=False)
+    else:
+        mel_filename = ""
 
     # Return a tuple describing this training example:
     return (audio_filename, mel_filename, N, text)

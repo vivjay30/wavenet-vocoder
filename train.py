@@ -52,7 +52,8 @@ from matplotlib import cm
 from warnings import warn
 
 from wavenet_vocoder import WaveNet
-from wavenet_vocoder.util import is_mulaw_quantize, is_mulaw, is_raw, is_scalar_input
+from wavenet_vocoder.util import is_mulaw_quantize, is_mulaw, is_raw, is_scalar_input, \
+    is_linear_quantize, linear_quantize, inv_linear_quantize
 from wavenet_vocoder.mixture import discretized_mix_logistic_loss
 from wavenet_vocoder.mixture import sample_from_discretized_mix_logistic
 from wavenet_vocoder.mixture import mix_gaussian_loss
@@ -490,9 +491,25 @@ def collate_fn(batch):
     # pad for time-axis
     if is_mulaw_quantize(hparams.input_type):
         padding_value = P.mulaw_quantize(0, mu=hparams.quantize_channels - 1)
-        x_batch = np.array([_pad_2d(to_categorical(
-            x[0], num_classes=hparams.quantize_channels),
-            max_input_len, 0, padding_value) for x in batch], dtype=np.float32)
+
+        if hparams.manual_scalar_input:
+            x_batch = np.array([_pad_2d(x[0].reshape(-1, 1), max_input_len, 0,
+                padding_value) for x in batch], dtype=np.float32)
+        else:
+            x_batch = np.array([_pad_2d(to_categorical(
+                x[0], num_classes=hparams.quantize_channels),
+                max_input_len, 0, padding_value) for x in batch], dtype=np.float32)
+    elif is_linear_quantize(hparams.input_type):
+        padding_value = linear_quantize(0, hparams.quantize_channels - 1)
+
+        if hparams.manual_scalar_input:
+            x_batch = np.array([_pad_2d(x[0].reshape(-1, 1), max_input_len, 0,
+                padding_value) for x in batch], dtype=np.float32)
+        else:
+            x_batch = np.array([_pad_2d(to_categorical(
+                x[0], num_classes=hparams.quantize_channels),
+                max_input_len, 0, padding_value) for x in batch], dtype=np.float32)
+
     else:
         x_batch = np.array([_pad_2d(x[0].reshape(-1, 1), max_input_len)
                             for x in batch], dtype=np.float32)
@@ -501,6 +518,10 @@ def collate_fn(batch):
     # (B, T)
     if is_mulaw_quantize(hparams.input_type):
         padding_value = P.mulaw_quantize(0, mu=hparams.quantize_channels - 1)
+        y_batch = np.array([_pad(x[0], max_input_len, constant_values=padding_value)
+                            for x in batch], dtype=np.int)
+    elif is_linear_quantize(hparams.input_type):
+        padding_value = linear_quantize(0, hparams.quantize_channels - 1)
         y_batch = np.array([_pad(x[0], max_input_len, constant_values=padding_value)
                             for x in batch], dtype=np.int)
     else:
@@ -525,7 +546,7 @@ def collate_fn(batch):
     # Covnert to channel first i.e., (B, C, T)
     x_batch = torch.FloatTensor(x_batch).transpose(1, 2).contiguous()
     # Add extra axis
-    if is_mulaw_quantize(hparams.input_type):
+    if is_mulaw_quantize(hparams.input_type) or is_linear_quantize(hparams.input_type):
         y_batch = torch.LongTensor(y_batch).unsqueeze(-1).contiguous()
     else:
         y_batch = torch.FloatTensor(y_batch).unsqueeze(-1).contiguous()
@@ -580,13 +601,15 @@ def eval_model(global_step, writer, device, model, y, c, g, input_lengths, eval_
     # Dummy silence
     if is_mulaw_quantize(hparams.input_type):
         initial_value = P.mulaw_quantize(0, hparams.quantize_channels - 1)
+    elif is_linear_quantize(hparams.input_type):
+        initial_value = linear_quantize(0, hparams.quantize_channels - 1)
     elif is_mulaw(hparams.input_type):
         initial_value = P.mulaw(0.0, hparams.quantize_channels)
     else:
         initial_value = 0.0
 
     # (C,)
-    if is_mulaw_quantize(hparams.input_type):
+    if (is_mulaw_quantize(hparams.input_type) or is_linear_quantize(hparams.input_type)) and not hparams.manual_scalar_input:
         initial_input = to_categorical(
             initial_value, num_classes=hparams.quantize_channels).astype(np.float32)
         initial_input = torch.from_numpy(initial_input).view(
@@ -605,6 +628,10 @@ def eval_model(global_step, writer, device, model, y, c, g, input_lengths, eval_
         y_hat = y_hat.max(1)[1].view(-1).long().cpu().data.numpy()
         y_hat = P.inv_mulaw_quantize(y_hat, hparams.quantize_channels - 1)
         y_target = P.inv_mulaw_quantize(y_target, hparams.quantize_channels - 1)
+    elif is_linear_quantize(hparams.input_type):
+        y_hat = y_hat.max(1)[1].view(-1).long().cpu().data.numpy()
+        y_hat = inv_linear_quantize(y_hat, hparams.quantize_channels - 1)
+        y_target = inv_linear_quantize(y_target, hparams.quantize_channels - 1)
     elif is_mulaw(hparams.input_type):
         y_hat = P.inv_mulaw(y_hat.view(-1).cpu().data.numpy(), hparams.quantize_channels)
         y_target = P.inv_mulaw(y_target, hparams.quantize_channels)
@@ -632,7 +659,7 @@ def save_states(global_step, writer, y_hat, y, input_lengths, checkpoint_dir=Non
     if y_hat.dim() == 4:
         y_hat = y_hat.squeeze(-1)
 
-    if is_mulaw_quantize(hparams.input_type):
+    if is_mulaw_quantize(hparams.input_type) or is_linear_quantize(hparams.input_type):
         # (B, T)
         y_hat = F.softmax(y_hat, dim=1).max(1)[1]
 
@@ -640,8 +667,12 @@ def save_states(global_step, writer, y_hat, y, input_lengths, checkpoint_dir=Non
         y_hat = y_hat[idx].data.cpu().long().numpy()
         y = y[idx].view(-1).data.cpu().long().numpy()
 
-        y_hat = P.inv_mulaw_quantize(y_hat, hparams.quantize_channels - 1)
-        y = P.inv_mulaw_quantize(y, hparams.quantize_channels - 1)
+        if is_mulaw_quantize(hparams.input_type):
+            y_hat = P.inv_mulaw_quantize(y_hat, hparams.quantize_channels - 1)
+            y = P.inv_mulaw_quantize(y, hparams.quantize_channels - 1)
+        elif is_linear_quantize(hparams.input_type):
+            y_hat = inv_linear_quantize(y_hat, hparams.quantize_channels - 1)
+            y = inv_linear_quantize(y, hparams.quantize_channels - 1)     
     else:
         # (B, T)
         if hparams.output_distribution == "Logistic":
@@ -720,6 +751,8 @@ def __train_step(device, phase, epoch, global_step, global_test_step,
 
     # Prepare data
     x, y = x.to(device), y.to(device)
+    if hparams.input_noise > 0.0:
+        x += hparams.input_noise * torch.normal(0, 1, size=x.size(), device=x.device)
     input_lengths = input_lengths.to(device)
     c = c.to(device) if c is not None else None
     g = g.to(device) if g is not None else None
@@ -739,7 +772,8 @@ def __train_step(device, phase, epoch, global_step, global_test_step,
     else:
         y_hat = model(x, c, g, False)
 
-    if is_mulaw_quantize(hparams.input_type):
+
+    if is_mulaw_quantize(hparams.input_type) or is_linear_quantize(hparams.input_type):
         # wee need 4d inputs for spatial cross entropy loss
         # (B, C, T, 1)
         y_hat = y_hat.unsqueeze(-1)
@@ -778,7 +812,7 @@ def __train_step(device, phase, epoch, global_step, global_test_step,
 
 
 def train_loop(device, model, data_loaders, optimizer, writer, checkpoint_dir=None):
-    if is_mulaw_quantize(hparams.input_type):
+    if is_mulaw_quantize(hparams.input_type) or is_linear_quantize(hparams.input_type):
         criterion = MaskedCrossEntropyLoss()
     else:
         if hparams.output_distribution == "Logistic":
@@ -804,6 +838,7 @@ def train_loop(device, model, data_loaders, optimizer, writer, checkpoint_dir=No
             train = (phase == "train_no_dev")
             running_loss = 0.
             test_evaluated = False
+
             for step, (x, y, c, g, input_lengths) in tqdm(enumerate(data_loader)):
                 # Whether to save eval (i.e., online decoding) result
                 do_eval = False
@@ -885,7 +920,7 @@ def save_checkpoint(device, model, optimizer, step, checkpoint_dir, epoch, ema=N
 
 
 def build_model():
-    if is_mulaw_quantize(hparams.input_type):
+    if is_mulaw_quantize(hparams.input_type) or is_linear_quantize(hparams.input_type):
         if hparams.out_channels != hparams.quantize_channels:
             raise RuntimeError(
                 "out_channels must equal to quantize_chennels if input_type is 'mulaw-quantize'")
@@ -912,7 +947,7 @@ def build_model():
         cin_pad=hparams.cin_pad,
         upsample_conditional_features=hparams.upsample_conditional_features,
         upsample_params=upsample_params,
-        scalar_input=is_scalar_input(hparams.input_type),
+        scalar_input=(is_scalar_input(hparams.input_type) or hparams.manual_scalar_input),
         output_distribution=hparams.output_distribution,
     )
     return model
@@ -973,6 +1008,7 @@ def restore_parts(path, model):
 def get_data_loaders(dump_root, speaker_id, test_shuffle=True):
     data_loaders = {}
     local_conditioning = hparams.cin_channels > 0
+    print("Local condition: {}".format(local_conditioning))
 
     if hparams.max_time_steps is not None:
         max_steps = ensure_divisible(hparams.max_time_steps, audio.get_hop_size(), True)

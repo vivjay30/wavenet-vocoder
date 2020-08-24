@@ -8,6 +8,8 @@ options:
     --num_workers=<n>        Num workers.
     --hparams=<parmas>       Hyper parameters [default: ].
     --preset=<json>          Path of preset parameters (json).
+    --extension=<string>     Pattern matching file extension
+    --no-mel                 Don't compute mel spectrogram
     -h, --help               Show help message.
 """
 from docopt import docopt
@@ -19,9 +21,9 @@ import importlib
 from hparams import hparams
 
 
-def preprocess(mod, in_dir, out_root, num_workers):
+def preprocess(mod, in_dir, out_root, num_workers, extension, no_mel=False):
     os.makedirs(out_dir, exist_ok=True)
-    metadata = mod.build_from_path(in_dir, out_dir, num_workers, tqdm=tqdm)
+    metadata = mod.build_from_path(in_dir, out_dir, num_workers, extension, no_mel=no_mel, tqdm=tqdm)
     write_metadata(metadata, out_dir)
 
 
@@ -45,6 +47,12 @@ if __name__ == "__main__":
     num_workers = args["--num_workers"]
     num_workers = cpu_count() // 2 if num_workers is None else int(num_workers)
     preset = args["--preset"]
+    extension = args["--extension"]
+    if extension is None: extension = "*.wav"
+
+    no_mel = args["--no-mel"]
+    if no_mel:
+        raise Exception("Mel spec is mandatory right now")
 
     # Load preset if specified
     if preset is not None:
@@ -68,4 +76,4 @@ Please use a generic dataset 'wavallin' instead.""")
         sys.exit(1)
 
     mod = importlib.import_module("datasets." + name)
-    preprocess(mod, in_dir, out_dir, num_workers)
+    preprocess(mod, in_dir, out_dir, num_workers, extension, no_mel)
