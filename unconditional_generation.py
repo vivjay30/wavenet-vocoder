@@ -24,7 +24,8 @@ import random
 from tqdm import tqdm
 from scipy.io import wavfile
 
-from wavenet_vocoder.util import is_mulaw_quantize, is_mulaw, is_raw
+from wavenet_vocoder.util import is_mulaw_quantize, is_mulaw, is_raw, \
+    is_linear_quantize, linear_quantize, inv_linear_quantize
 
 import audio
 from hparams import hparams

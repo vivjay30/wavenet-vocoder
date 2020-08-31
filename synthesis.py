@@ -26,7 +26,8 @@ from nnmnkwii import preprocessing as P
 from tqdm import tqdm
 import librosa
 
-from wavenet_vocoder.util import is_mulaw_quantize, is_mulaw, is_raw
+from wavenet_vocoder.util import is_mulaw_quantize, is_mulaw, is_raw, \
+    is_linear_quantize, linear_quantize, inv_linear_quantize
 
 import audio
 from hparams import hparams
@@ -66,6 +67,10 @@ def batch_wavegen(model, c=None, g=None, fast=True, tqdm=tqdm, length=None):
         y_hat = y_hat.max(1)[1].view(B, -1).float().cpu().data.numpy()
         for i in range(B):
             y_hat[i] = P.inv_mulaw_quantize(y_hat[i], hparams.quantize_channels - 1)
+    elif is_linear_quantize(hparams.input_type):
+        y_hat = y_hat.max(1)[1].view(B, -1).float().cpu().data.numpy()
+        for i in range(B):
+            y_hat[i] = inv_linear_quantize(y_hat[i], hparams.quantize_channels - 1)
     elif is_mulaw(hparams.input_type):
         y_hat = y_hat.view(B, -1).cpu().data.numpy()
         for i in range(B):
