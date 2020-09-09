@@ -364,7 +364,7 @@ class WaveNet(nn.Module):
         self.apply(remove_weight_norm)
 
 
-    def smoothed_loss(self, input_batch, sigma=1.0):
+    def smoothed_loss(self, input_batch, sigma=1.0, batched=False):
         """
         We compute the probability distribution smoothed by a gaussian. Then we return
         the gradient w.r.t each sample along with the actual probabilities
@@ -382,11 +382,16 @@ class WaveNet(nn.Module):
             raise "Not implemented for non-scalar input"
 
         # Cut off last sample of input to preserve causality
-        network_input = input_batch[:, :-1]
-        target_output = input_batch[:, 1:].unsqueeze(1)
+        if batched:
+            network_input = input_batch[:, :, :-1]
+            target_output = input_batch[:, :, 1:]
+        else:
+            network_input = input_batch[:, :-1]
+            target_output = input_batch[:, 1:].unsqueeze(1)
 
         # Forward pass
-        prediction = self.forward(network_input.unsqueeze(0)) # B x 256 x T
+        if batched: prediction = self.forward(network_input) # B x 256 x T
+        else: prediction = self.forward(network_input.unsqueeze(0)) # 1 x 256 x T
 
         indices = torch.arange(0, self.out_channels, device=prediction.device).view(1, self.out_channels, 1)
 
@@ -395,7 +400,6 @@ class WaveNet(nn.Module):
                    - torch.logsumexp(prediction, axis=1)
 
         # log_prob = torch.sum(log_prob)
-
         return log_prob, prediction 
 
 
