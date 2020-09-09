@@ -44,7 +44,10 @@ def batch_wavegen(model, c=None, g=None, fast=True, tqdm=tqdm, length=None):
     from train import sanity_check
     sanity_check(model, c, g)
     # assert c is not None
-    B = 1 #c.shape[0]
+    if c is not None:
+        B = c.shape[0]
+    else:
+        B = 1 #c.shape[0]
     model.eval()
     if fast:
         model.make_generation_fast_()

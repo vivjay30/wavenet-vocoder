@@ -70,16 +70,16 @@ def _process_utterance(out_dir, index, wav_path, text, no_mel):
         constant_values = 0.0
         out_dtype = np.float32
 
-    # Compute a mel-scale spectrogram from the trimmed wav:
-    # (N, D)
-    if not no_mel:
-        mel_spectrogram = audio.logmelspectrogram(wav).astype(np.float32).T
-
     if hparams.global_gain_scale > 0:
         wav *= hparams.global_gain_scale
 
     if hparams.normalize_max_audio:
         wav /= abs(wav).max()
+
+    # Compute a mel-scale spectrogram from the trimmed wav:
+    # (N, D)
+    if not no_mel:
+        mel_spectrogram = audio.logmelspectrogram(wav).astype(np.float32).T
 
     # Time domain preprocessing
     if hparams.preprocess is not None and hparams.preprocess not in ["", "none"]:
@@ -126,8 +126,8 @@ def _process_utterance(out_dir, index, wav_path, text, no_mel):
             out.astype(out_dtype), allow_pickle=False)
     if not no_mel:
         mel_filename = '%s-feats.npy' % (name)
-        # np.save(os.path.join(out_dir, mel_filename),
-        #         mel_spectrogram.astype(np.float32), allow_pickle=False)
+        np.save(os.path.join(out_dir, mel_filename),
+                mel_spectrogram.astype(np.float32), allow_pickle=False)
     else:
         mel_filename = ""
 

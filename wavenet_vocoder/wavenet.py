@@ -364,7 +364,7 @@ class WaveNet(nn.Module):
         self.apply(remove_weight_norm)
 
 
-    def smoothed_loss(self, input_batch, sigma=1.0, batched=False):
+    def smoothed_loss(self, input_batch, sigma=1.0, c=None, batched=False):
         """
         We compute the probability distribution smoothed by a gaussian. Then we return
         the gradient w.r.t each sample along with the actual probabilities
